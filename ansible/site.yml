@@ -1,0 +1,65 @@
+---
+# Golden Image Hardening Playbook
+# Applies CIS Level 1 baseline + runtime dependencies
+# Author: Kiran S
+
+- name: Golden Image Hardening
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    cis_level: 1
+    java_version: "17"
+    cloudwatch_agent_version: "latest"
+
+  pre_tasks:
+    - name: Wait for yum lock
+      ansible.builtin.wait_for:
+        path: /var/run/yum.pid
+        state: absent
+        timeout: 120
+
+    - name: Update all packages to latest
+      ansible.builtin.yum:
+        name: "*"
+        state: latest
+        security: true
+      tags: [hardening, updates]
+
+  roles:
+    - role: base-hardening
+      tags: [hardening]
+    - role: java-runtime
+      tags: [runtime]
+    - role: monitoring-agent
+      tags: [monitoring]
+
+  post_tasks:
+    - name: Verify CIS compliance
+      ansible.builtin.command: /opt/compliance/check-cis.sh
+      register: cis_result
+      changed_when: false
+      failed_when: cis_result.rc != 0
+      tags: [validation]
+
+    - name: Display compliance summary
+      ansible.builtin.debug:
+        msg: "{{ cis_result.stdout_lines }}"
+      tags: [validation]
+
+    - name: Clean up package cache
+      ansible.builtin.yum:
+        autoremove: true
+        clean: all
+      tags: [cleanup]
+
+    - name: Remove SSH host keys (regenerated on first boot)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/ssh/ssh_host_rsa_key
+        - /etc/ssh/ssh_host_ecdsa_key
+        - /etc/ssh/ssh_host_ed25519_key
+      tags: [hardening, cleanup]
